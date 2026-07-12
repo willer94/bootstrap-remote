@@ -26,6 +26,7 @@
 - 安装 Codex 后自动在 `.zshrc` 和 `.bashrc` 中配置 `codex-proxy`
 - 自动把 `~/.local/bin` 加入 Zsh/Bash 登录 shell 的 PATH，供 Codex SSH Connection 探测
 - 兼容已有的 npm/NVM Codex 安装，避免误用系统旧版 Node.js
+- 为 `codex` 命令安装代理启动器，确保 Codex App 直接启动的 `app-server` 也走 Mihomo
 
 ## 第一阶段：基础环境
 
@@ -85,6 +86,16 @@ command -v codex && codex --version
 
 这和 Codex 桌面应用通过 SSH 检查远程 CLI 的方式一致。
 
+Codex 桌面应用不会调用交互式 shell 函数 `codex-proxy`，而是直接执行
+`codex app-server`。因此脚本还会把实际 Codex 程序保存在：
+
+```text
+~/.local/libexec/codex/codex-backend
+```
+
+并生成 `~/.local/bin/codex` 启动器，在执行后端前注入 Mihomo 的 HTTP、HTTPS、
+SOCKS 和 `NO_PROXY` 环境变量。这样 CLI、Codex SSH Connection 和 MCP 请求使用相同代理。
+
 ## 常用命令
 
 ```bash
@@ -133,7 +144,18 @@ ssh your-host 'exec "$SHELL" -lc "command -v codex && codex --version"'
 
 如果能找到 Codex，但出现 `SyntaxError: Unexpected reserved word`，通常是 npm 安装的
 Codex 被 `/usr/bin/env node` 交给系统旧版 Node.js。脚本会在 `~/.local/bin/codex`
-生成加载 NVM 的包装器，让 SSH login shell 使用 NVM 当前 Node 版本。
+生成代理启动器，并在后端生成加载 NVM 的包装器，让 SSH login shell 使用 NVM
+当前 Node 版本。
+
+如果 Codex 能启动但显示 `Address not available (os error 99)`，检查其进程环境：
+
+```bash
+pid=$(pgrep -n -f 'codex.*app-server')
+tr '\0' '\n' <"/proc/$pid/environ" | grep -i proxy
+```
+
+应当能看到 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`。如果没有，重新运行
+`install-codex.sh`，然后在 Codex 桌面应用中断开并重新连接 SSH 主机。
 
 如果服务器开始时无法访问 GitHub，可先导出已有代理的 `HTTP_PROXY`、
 `HTTPS_PROXY` 和 `ALL_PROXY` 后运行基础脚本；`curl` 与 `git` 会继承这些变量。

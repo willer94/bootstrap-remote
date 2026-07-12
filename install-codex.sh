@@ -134,16 +134,13 @@ fi
 
 export PATH="$HOME/.local/bin:$PATH"
 
-install_nvm_codex_wrapper_if_needed() {
-  local nvm_codex
-  [[ ! -e $HOME/.local/bin/codex ]] || return 0
-  [[ -d $HOME/.nvm/versions/node ]] || return 0
-  nvm_codex=$(find "$HOME/.nvm/versions/node" -maxdepth 3 \
-    \( -type f -o -type l \) -path '*/bin/codex' -print -quit 2>/dev/null || true)
-  [[ -n $nvm_codex ]] || return 0
+CODEX_BACKEND_DIR=$HOME/.local/libexec/codex
+CODEX_BACKEND=$CODEX_BACKEND_DIR/codex-backend
+CODEX_LAUNCHER=$HOME/.local/bin/codex
+mkdir -p "$CODEX_BACKEND_DIR"
 
-  warn "检测到 NVM 版 Codex，将创建可供 SSH login shell 使用的包装器"
-  cat >"$HOME/.local/bin/codex" <<'EOF'
+create_nvm_backend() {
+  cat >"$CODEX_BACKEND" <<'EOF'
 #!/usr/bin/env bash
 set -e
 
@@ -162,10 +159,58 @@ fi
 
 exec "$NVM_BIN/codex" "$@"
 EOF
-  chmod 755 "$HOME/.local/bin/codex"
+  chmod 755 "$CODEX_BACKEND"
 }
 
-install_nvm_codex_wrapper_if_needed
+prepare_codex_backend() {
+  local resolved
+  if [[ -e $CODEX_LAUNCHER ]] && \
+    ! grep -Fq '# managed-by: remote-dev-codex-launcher' "$CODEX_LAUNCHER" 2>/dev/null; then
+    resolved=$(readlink -f "$CODEX_LAUNCHER" 2>/dev/null || true)
+    if [[ $resolved == "$HOME/.nvm/"* ]]; then
+      warn "检测到 NVM 版 Codex，将创建加载 NVM 的后端包装器"
+      create_nvm_backend
+      rm -f "$CODEX_LAUNCHER"
+    elif [[ -L $CODEX_LAUNCHER && -n $resolved ]]; then
+      ln -sfn "$resolved" "$CODEX_BACKEND"
+      rm -f "$CODEX_LAUNCHER"
+    else
+      mv -f "$CODEX_LAUNCHER" "$CODEX_BACKEND"
+      chmod 755 "$CODEX_BACKEND"
+    fi
+  fi
+
+  if [[ ! -x $CODEX_BACKEND && -d $HOME/.nvm/versions/node ]]; then
+    if find "$HOME/.nvm/versions/node" -maxdepth 3 \
+      \( -type f -o -type l \) -path '*/bin/codex' -print -quit 2>/dev/null | grep -q .; then
+      warn "检测到 NVM 版 Codex，将创建加载 NVM 的后端包装器"
+      create_nvm_backend
+    fi
+  fi
+
+  [[ -x $CODEX_BACKEND ]] || die "无法定位 Codex 后端程序"
+}
+
+prepare_codex_backend
+
+cat >"$CODEX_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+# managed-by: remote-dev-codex-launcher
+set -e
+
+export HTTP_PROXY="${RUNTIME_PROXY_URL}"
+export HTTPS_PROXY="${RUNTIME_PROXY_URL}"
+export ALL_PROXY="${RUNTIME_SOCKS_PROXY_URL}"
+export NO_PROXY="localhost,127.0.0.1,::1"
+export http_proxy="\$HTTP_PROXY"
+export https_proxy="\$HTTPS_PROXY"
+export all_proxy="\$ALL_PROXY"
+export no_proxy="\$NO_PROXY"
+
+exec "${CODEX_BACKEND}" "\$@"
+EOF
+chmod 755 "$CODEX_LAUNCHER"
+log "已安装 Codex 代理启动器：$CODEX_LAUNCHER"
 
 replace_managed_block() {
   local file=$1 begin=$2 end=$3 content=$4 tmp
