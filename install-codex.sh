@@ -80,6 +80,16 @@ if [[ $PROXY_MODE == auto && -z $PROXY_URL ]]; then
   PROXY_URL=$(discover_mihomo_proxy || true)
 fi
 
+RUNTIME_PROXY_URL=$PROXY_URL
+if [[ -z $RUNTIME_PROXY_URL ]]; then
+  RUNTIME_PROXY_URL=$(discover_mihomo_proxy || true)
+fi
+RUNTIME_PROXY_URL=${RUNTIME_PROXY_URL:-http://127.0.0.1:7890}
+[[ $RUNTIME_PROXY_URL == http://* ]] || \
+  die "Codex 辅助函数需要 HTTP/Mixed 代理地址，当前为：$RUNTIME_PROXY_URL"
+RUNTIME_PROXY_ENDPOINT=${RUNTIME_PROXY_URL#http://}
+RUNTIME_SOCKS_PROXY_URL=socks5h://$RUNTIME_PROXY_ENDPOINT
+
 INSTALLER=$(mktemp)
 trap 'rm -f "$INSTALLER"' EXIT
 
@@ -123,10 +133,146 @@ else
 fi
 
 export PATH="$HOME/.local/bin:$PATH"
+
+CODEX_BACKEND_DIR=$HOME/.local/libexec/codex
+CODEX_BACKEND=$CODEX_BACKEND_DIR/codex-backend
+CODEX_LAUNCHER=$HOME/.local/bin/codex
+mkdir -p "$CODEX_BACKEND_DIR"
+
+create_nvm_backend() {
+  cat >"$CODEX_BACKEND" <<'EOF'
+#!/usr/bin/env bash
+set -e
+
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [[ ! -s $NVM_DIR/nvm.sh ]]; then
+  echo "NVM not found: $NVM_DIR/nvm.sh" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$NVM_DIR/nvm.sh"
+if [[ -z ${NVM_BIN:-} || ! -x $NVM_BIN/codex ]]; then
+  echo "Codex not found in the active NVM Node installation" >&2
+  exit 1
+fi
+
+exec "$NVM_BIN/codex" "$@"
+EOF
+  chmod 755 "$CODEX_BACKEND"
+}
+
+prepare_codex_backend() {
+  local resolved
+  if [[ -e $CODEX_LAUNCHER ]] && \
+    ! grep -Fq '# managed-by: remote-dev-codex-launcher' "$CODEX_LAUNCHER" 2>/dev/null; then
+    resolved=$(readlink -f "$CODEX_LAUNCHER" 2>/dev/null || true)
+    if [[ $resolved == "$HOME/.nvm/"* ]]; then
+      warn "检测到 NVM 版 Codex，将创建加载 NVM 的后端包装器"
+      create_nvm_backend
+      rm -f "$CODEX_LAUNCHER"
+    elif [[ -L $CODEX_LAUNCHER && -n $resolved ]]; then
+      ln -sfn "$resolved" "$CODEX_BACKEND"
+      rm -f "$CODEX_LAUNCHER"
+    else
+      mv -f "$CODEX_LAUNCHER" "$CODEX_BACKEND"
+      chmod 755 "$CODEX_BACKEND"
+    fi
+  fi
+
+  if [[ ! -x $CODEX_BACKEND && -d $HOME/.nvm/versions/node ]]; then
+    if find "$HOME/.nvm/versions/node" -maxdepth 3 \
+      \( -type f -o -type l \) -path '*/bin/codex' -print -quit 2>/dev/null | grep -q .; then
+      warn "检测到 NVM 版 Codex，将创建加载 NVM 的后端包装器"
+      create_nvm_backend
+    fi
+  fi
+
+  [[ -x $CODEX_BACKEND ]] || die "无法定位 Codex 后端程序"
+}
+
+prepare_codex_backend
+
+cat >"$CODEX_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+# managed-by: remote-dev-codex-launcher
+set -e
+
+export HTTP_PROXY="${RUNTIME_PROXY_URL}"
+export HTTPS_PROXY="${RUNTIME_PROXY_URL}"
+export ALL_PROXY="${RUNTIME_SOCKS_PROXY_URL}"
+export NO_PROXY="localhost,127.0.0.1,::1"
+export http_proxy="\$HTTP_PROXY"
+export https_proxy="\$HTTPS_PROXY"
+export all_proxy="\$ALL_PROXY"
+export no_proxy="\$NO_PROXY"
+
+exec "${CODEX_BACKEND}" "\$@"
+EOF
+chmod 755 "$CODEX_LAUNCHER"
+log "已安装 Codex 代理启动器：$CODEX_LAUNCHER"
+
+replace_managed_block() {
+  local file=$1 begin=$2 end=$3 content=$4 tmp
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+  tmp=$(mktemp)
+  awk -v begin="$begin" -v end="$end" '
+    $0 == begin { skipping = 1; next }
+    $0 == end { skipping = 0; next }
+    !skipping { print }
+  ' "$file" >"$tmp"
+  printf '\n%s\n%s\n%s\n' "$begin" "$content" "$end" >>"$tmp"
+  cat "$tmp" >"$file"
+  rm -f "$tmp"
+}
+
+CODEX_PROXY_BLOCK=$(cat <<EOF
+codex-proxy() {
+  HTTP_PROXY=${RUNTIME_PROXY_URL} \\
+  HTTPS_PROXY=${RUNTIME_PROXY_URL} \\
+  ALL_PROXY=${RUNTIME_SOCKS_PROXY_URL} \\
+  NO_PROXY=localhost,127.0.0.1,::1 \\
+  command codex "\$@"
+}
+EOF
+)
+
+for shell_rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+  replace_managed_block "$shell_rc" \
+    '# >>> codex-proxy >>>' \
+    '# <<< codex-proxy <<<' \
+    "$CODEX_PROXY_BLOCK"
+  log "已更新 $shell_rc"
+done
+
+LOGIN_PATH_BLOCK='export PATH="$HOME/.local/bin:$PATH"'
+for login_profile in "$HOME/.profile" "$HOME/.zprofile"; do
+  replace_managed_block "$login_profile" \
+    '# >>> remote-dev-login-path >>>' \
+    '# <<< remote-dev-login-path <<<' \
+    "$LOGIN_PATH_BLOCK"
+  log "已更新 $login_profile"
+done
+if [[ -e $HOME/.bash_profile ]]; then
+  replace_managed_block "$HOME/.bash_profile" \
+    '# >>> remote-dev-login-path >>>' \
+    '# <<< remote-dev-login-path <<<' \
+    "$LOGIN_PATH_BLOCK"
+  log "已更新 $HOME/.bash_profile"
+fi
+
 if command -v codex >/dev/null 2>&1; then
   codex --version
 else
-  warn "安装器已完成，但当前 shell 尚未找到 codex；重新登录后再试"
+  warn "安装器已完成，但当前 shell 尚未找到 codex"
+fi
+
+LOGIN_SHELL=$(getent passwd "$(id -un)" | cut -d: -f7)
+if [[ -x $LOGIN_SHELL ]] && "$LOGIN_SHELL" -lc 'command -v codex && codex --version'; then
+  log "SSH login shell 已能发现并运行 Codex"
+else
+  warn "login shell 验证失败；请重新登录后执行：command -v codex && codex --version"
 fi
 
 cat <<'EOF'
