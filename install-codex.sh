@@ -133,11 +133,39 @@ else
 fi
 
 export PATH="$HOME/.local/bin:$PATH"
-if command -v codex >/dev/null 2>&1; then
-  codex --version
-else
-  warn "安装器已完成，但当前 shell 尚未找到 codex；重新登录后再试"
+
+install_nvm_codex_wrapper_if_needed() {
+  local nvm_codex
+  [[ ! -e $HOME/.local/bin/codex ]] || return 0
+  [[ -d $HOME/.nvm/versions/node ]] || return 0
+  nvm_codex=$(find "$HOME/.nvm/versions/node" -maxdepth 3 \
+    \( -type f -o -type l \) -path '*/bin/codex' -print -quit 2>/dev/null || true)
+  [[ -n $nvm_codex ]] || return 0
+
+  warn "检测到 NVM 版 Codex，将创建可供 SSH login shell 使用的包装器"
+  cat >"$HOME/.local/bin/codex" <<'EOF'
+#!/usr/bin/env bash
+set -e
+
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [[ ! -s $NVM_DIR/nvm.sh ]]; then
+  echo "NVM not found: $NVM_DIR/nvm.sh" >&2
+  exit 1
 fi
+
+# shellcheck disable=SC1090
+source "$NVM_DIR/nvm.sh"
+if [[ -z ${NVM_BIN:-} || ! -x $NVM_BIN/codex ]]; then
+  echo "Codex not found in the active NVM Node installation" >&2
+  exit 1
+fi
+
+exec "$NVM_BIN/codex" "$@"
+EOF
+  chmod 755 "$HOME/.local/bin/codex"
+}
+
+install_nvm_codex_wrapper_if_needed
 
 replace_managed_block() {
   local file=$1 begin=$2 end=$3 content=$4 tmp
@@ -172,6 +200,35 @@ for shell_rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
     "$CODEX_PROXY_BLOCK"
   log "已更新 $shell_rc"
 done
+
+LOGIN_PATH_BLOCK='export PATH="$HOME/.local/bin:$PATH"'
+for login_profile in "$HOME/.profile" "$HOME/.zprofile"; do
+  replace_managed_block "$login_profile" \
+    '# >>> remote-dev-login-path >>>' \
+    '# <<< remote-dev-login-path <<<' \
+    "$LOGIN_PATH_BLOCK"
+  log "已更新 $login_profile"
+done
+if [[ -e $HOME/.bash_profile ]]; then
+  replace_managed_block "$HOME/.bash_profile" \
+    '# >>> remote-dev-login-path >>>' \
+    '# <<< remote-dev-login-path <<<' \
+    "$LOGIN_PATH_BLOCK"
+  log "已更新 $HOME/.bash_profile"
+fi
+
+if command -v codex >/dev/null 2>&1; then
+  codex --version
+else
+  warn "安装器已完成，但当前 shell 尚未找到 codex"
+fi
+
+LOGIN_SHELL=$(getent passwd "$(id -un)" | cut -d: -f7)
+if [[ -x $LOGIN_SHELL ]] && "$LOGIN_SHELL" -lc 'command -v codex && codex --version'; then
+  log "SSH login shell 已能发现并运行 Codex"
+else
+  warn "login shell 验证失败；请重新登录后执行：command -v codex && codex --version"
+fi
 
 cat <<'EOF'
 

@@ -24,6 +24,8 @@
 - 支持显式代理或强制直连
 - `proxy`、`proxy-on`、`proxy-off` 辅助命令
 - 安装 Codex 后自动在 `.zshrc` 和 `.bashrc` 中配置 `codex-proxy`
+- 自动把 `~/.local/bin` 加入 Zsh/Bash 登录 shell 的 PATH，供 Codex SSH Connection 探测
+- 兼容已有的 npm/NVM Codex 安装，避免误用系统旧版 Node.js
 
 ## 第一阶段：基础环境
 
@@ -74,6 +76,15 @@ codex-proxy
 `install-codex.sh` 会用带标记的托管区块同时更新 `~/.zshrc` 和 `~/.bashrc`；
 重复运行只会更新该区块，不会重复追加函数。
 
+脚本还会更新 `~/.zprofile` 和 `~/.profile` 中的登录 PATH。若存在
+`~/.bash_profile`，也会同步更新它。安装结束时会用当前用户的登录 shell 执行：
+
+```bash
+command -v codex && codex --version
+```
+
+这和 Codex 桌面应用通过 SSH 检查远程 CLI 的方式一致。
+
 ## 常用命令
 
 ```bash
@@ -108,6 +119,21 @@ mihomo-log
 - 现有 `.zshrc`、tmux 或 Mihomo 配置在替换前会生成时间戳备份。
 - 重复执行不会重复插入 Zsh 辅助函数。
 - Codex 登录凭据由 Codex 自己管理，脚本不会读取或保存凭据。
+
+## SSH 显示“未安装 Codex CLI”
+
+先从本机复现 Codex App 的检查：
+
+```bash
+ssh your-host 'exec "$SHELL" -lc "command -v codex && codex --version"'
+```
+
+如果交互终端能运行，而这条命令找不到 Codex，通常是 `~/.local/bin` 或 NVM 只在
+`.zshrc`/`.bashrc` 中初始化。重新运行 `install-codex.sh` 会补齐登录 shell PATH。
+
+如果能找到 Codex，但出现 `SyntaxError: Unexpected reserved word`，通常是 npm 安装的
+Codex 被 `/usr/bin/env node` 交给系统旧版 Node.js。脚本会在 `~/.local/bin/codex`
+生成加载 NVM 的包装器，让 SSH login shell 使用 NVM 当前 Node 版本。
 
 如果服务器开始时无法访问 GitHub，可先导出已有代理的 `HTTP_PROXY`、
 `HTTPS_PROXY` 和 `ALL_PROXY` 后运行基础脚本；`curl` 与 `git` 会继承这些变量。

@@ -139,6 +139,8 @@ move_aside() {
 
 replace_managed_block() {
   local file=$1 begin=$2 end=$3 content=$4 tmp
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
   tmp=$(mktemp)
   awk -v begin="$begin" -v end="$end" '
     $0 == begin { skipping = 1; next }
@@ -252,6 +254,20 @@ replace_managed_block "$HOME/.zshrc" \
   '# >>> remote-dev-bootstrap >>>' \
   '# <<< remote-dev-bootstrap <<<' \
   "$ZSH_BLOCK"
+
+LOGIN_PATH_BLOCK='export PATH="$HOME/.local/bin:$PATH"'
+for login_profile in "$HOME/.profile" "$HOME/.zprofile"; do
+  replace_managed_block "$login_profile" \
+    '# >>> remote-dev-login-path >>>' \
+    '# <<< remote-dev-login-path <<<' \
+    "$LOGIN_PATH_BLOCK"
+done
+if [[ -e $HOME/.bash_profile ]]; then
+  replace_managed_block "$HOME/.bash_profile" \
+    '# >>> remote-dev-login-path >>>' \
+    '# <<< remote-dev-login-path <<<' \
+    "$LOGIN_PATH_BLOCK"
+fi
 
 if ((CHANGE_SHELL)); then
   ZSH_PATH=$(command -v zsh)
