@@ -244,10 +244,6 @@ proxy() {
   command "\$@"
 }
 
-codex-proxy() {
-  proxy codex "\$@"
-}
-
 alias mihomo-status='systemctl --user status mihomo --no-pager'
 alias mihomo-log='journalctl --user -u mihomo -f'
 EOF

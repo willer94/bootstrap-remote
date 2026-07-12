@@ -22,7 +22,8 @@
 - OpenAI Codex CLI 官方安装器
 - 自动发现 Mihomo mixed port
 - 支持显式代理或强制直连
-- `proxy`、`proxy-on`、`proxy-off`、`codex-proxy` 辅助命令
+- `proxy`、`proxy-on`、`proxy-off` 辅助命令
+- 安装 Codex 后自动在 `.zshrc` 和 `.bashrc` 中配置 `codex-proxy`
 
 ## 第一阶段：基础环境
 
@@ -69,6 +70,9 @@ MIHOMO_SUBSCRIPTION_URL='你的 Clash/Mihomo 订阅地址' \
 ```bash
 codex-proxy
 ```
+
+`install-codex.sh` 会用带标记的托管区块同时更新 `~/.zshrc` 和 `~/.bashrc`；
+重复运行只会更新该区块，不会重复追加函数。
 
 ## 常用命令
 

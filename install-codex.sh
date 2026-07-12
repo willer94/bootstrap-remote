@@ -80,6 +80,16 @@ if [[ $PROXY_MODE == auto && -z $PROXY_URL ]]; then
   PROXY_URL=$(discover_mihomo_proxy || true)
 fi
 
+RUNTIME_PROXY_URL=$PROXY_URL
+if [[ -z $RUNTIME_PROXY_URL ]]; then
+  RUNTIME_PROXY_URL=$(discover_mihomo_proxy || true)
+fi
+RUNTIME_PROXY_URL=${RUNTIME_PROXY_URL:-http://127.0.0.1:7890}
+[[ $RUNTIME_PROXY_URL == http://* ]] || \
+  die "Codex 辅助函数需要 HTTP/Mixed 代理地址，当前为：$RUNTIME_PROXY_URL"
+RUNTIME_PROXY_ENDPOINT=${RUNTIME_PROXY_URL#http://}
+RUNTIME_SOCKS_PROXY_URL=socks5h://$RUNTIME_PROXY_ENDPOINT
+
 INSTALLER=$(mktemp)
 trap 'rm -f "$INSTALLER"' EXIT
 
@@ -128,6 +138,40 @@ if command -v codex >/dev/null 2>&1; then
 else
   warn "安装器已完成，但当前 shell 尚未找到 codex；重新登录后再试"
 fi
+
+replace_managed_block() {
+  local file=$1 begin=$2 end=$3 content=$4 tmp
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+  tmp=$(mktemp)
+  awk -v begin="$begin" -v end="$end" '
+    $0 == begin { skipping = 1; next }
+    $0 == end { skipping = 0; next }
+    !skipping { print }
+  ' "$file" >"$tmp"
+  printf '\n%s\n%s\n%s\n' "$begin" "$content" "$end" >>"$tmp"
+  cat "$tmp" >"$file"
+  rm -f "$tmp"
+}
+
+CODEX_PROXY_BLOCK=$(cat <<EOF
+codex-proxy() {
+  HTTP_PROXY=${RUNTIME_PROXY_URL} \\
+  HTTPS_PROXY=${RUNTIME_PROXY_URL} \\
+  ALL_PROXY=${RUNTIME_SOCKS_PROXY_URL} \\
+  NO_PROXY=localhost,127.0.0.1,::1 \\
+  command codex "\$@"
+}
+EOF
+)
+
+for shell_rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+  replace_managed_block "$shell_rc" \
+    '# >>> codex-proxy >>>' \
+    '# <<< codex-proxy <<<' \
+    "$CODEX_PROXY_BLOCK"
+  log "已更新 $shell_rc"
+done
 
 cat <<'EOF'
 
